@@ -13,7 +13,7 @@ class VkApi:
     
     TOO_MANY_REQ_PER_SECOND_ERR = 6
     API_URL    = "https://api.vk.com/method/"
-    API_VER    = "5.52"
+    API_VER    = "5.199"
 
     def __init__(self, access_token = None):
         """ Constructor
@@ -46,7 +46,9 @@ class VkApi:
         
         for try_number in range(1, TRIES + 1):
             try:
-                with urllib.request.urlopen(request_url, request_data) as conn:
+                req = urllib.request.Request(request_url, request_data)
+                req.add_header('User-Agent', 'Mozilla/5.0')
+                with urllib.request.urlopen(req, timeout=10) as conn:
                     response = json.loads(conn.read().decode("utf-8"))
                     logging.debug("response = %s" % response)
                     if "error" in response:
@@ -57,7 +59,11 @@ class VkApi:
                         else:
                             raise VkApiException(response["error"]) 
                     break
-            except urllib.error.URLError as e:
+            except (urllib.error.URLError, TimeoutError) as e:
+                if try_number < TRIES:
+                    logging.warning("API request failed (attempt %d/%d): %s. Retrying...", try_number, TRIES, str(e))
+                    time.sleep(DELAY)
+                    continue
                 raise e    
 
         return response["response"]
@@ -76,7 +82,7 @@ class VkApi:
         for offset in range(0, len(uids), MAX_PER_REQUEST):
             users += self.call_api('users.get', {
                 'user_ids': ','.join(str(x) for x in uids[offset : offset + MAX_PER_REQUEST]),
-                'fileds': ','.join(fields),
+                'fields': ','.join(fields),
                 'name_case': nameCase})
         return users
 
@@ -89,6 +95,7 @@ class VkApi:
         Returns:
             List of album objects(See VK API Docs) as dict
         """
+        time.sleep(0.34)
         return self.call_api('photos.getAlbums', {
             'owner_id': ownerId,
             'need_system': int(needSystem),
@@ -104,12 +111,58 @@ class VkApi:
             List of photo objects (see VK API Docs) as dict
         """
         MAX_PER_REQUEST = 1000
+        API_CALL_DELAY = 0.34
         photos = []
+        album_id = album['id']
+        
         for offset in range(0, album['size'], MAX_PER_REQUEST):
-            photos += self.call_api('photos.get', {
+            params = {
                 'owner_id': album['owner_id'],
-                'album_id': album['id'],
                 'offset': offset,
-                'count': MAX_PER_REQUEST
-                })['items']
+                'count': MAX_PER_REQUEST,
+                'photo_sizes': 1
+            }
+            
+            if album_id == -9000:
+                params['album_id'] = 'tagged'
+            elif album_id == -6:
+                params['album_id'] = 'profile'
+            elif album_id == -7:
+                params['album_id'] = 'wall'
+            elif album_id == -15:
+                params['album_id'] = 'saved'
+            elif album_id >= 0:
+                params['album_id'] = album_id
+            else:
+                params['album_id'] = str(album_id)
+            
+            try:
+                photos += self.call_api('photos.get', params)['items']
+            except VkApiException as e:
+                error_msg = str(e)
+                if 'album_id is invalid' in error_msg and album_id < 0:
+                    params.pop('album_id', None)
+                    try:
+                        photos += self.call_api('photos.get', params)['items']
+                    except VkApiException as e2:
+                        logging.warning("Cannot get photos from album %s: %s. Trying photos.getUserPhotos...", album_id, str(e2))
+                        try:
+                            user_photos = self.call_api('photos.getUserPhotos', {
+                                'user_id': album['owner_id'],
+                                'offset': offset,
+                                'count': MAX_PER_REQUEST,
+                                'photo_sizes': 1
+                            })
+                            if 'items' in user_photos:
+                                photos += user_photos['items']
+                            else:
+                                photos += user_photos
+                        except VkApiException as e3:
+                            logging.error("Failed to get photos from album %s using alternative methods: %s", album_id, str(e3))
+                            raise
+                else:
+                    raise
+            
+            if offset + MAX_PER_REQUEST < album['size']:
+                time.sleep(API_CALL_DELAY)
         return photos
