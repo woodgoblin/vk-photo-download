@@ -166,3 +166,121 @@ class VkApi:
             if offset + MAX_PER_REQUEST < album['size']:
                 time.sleep(API_CALL_DELAY)
         return photos
+
+    def getGroupsById(self, group_ids):
+        """Get groups by IDs or screen names.
+        Args:
+            group_ids (list): List of group IDs (int) or screen names (str).
+        Returns:
+            List of group objects with at least 'id', 'name'.
+        """
+        if not group_ids:
+            return []
+        time.sleep(0.34)
+        ids_param = ','.join(str(x) for x in group_ids)
+        resp = self.call_api('groups.getById', {
+            'group_ids': ids_param,
+        })
+        raw_list = None
+        if isinstance(resp, list):
+            raw_list = resp
+        elif isinstance(resp, dict):
+            if 'id' in resp and ('name' in resp or 'title' in resp):
+                raw_list = [resp]
+            elif 'items' in resp:
+                raw_list = resp['items']
+            elif 'groups' in resp:
+                raw_list = resp['groups']
+        if raw_list is not None:
+            out = []
+            for g in raw_list:
+                if not isinstance(g, dict):
+                    continue
+                g = dict(g)
+                if 'id' not in g and 'gid' in g:
+                    g['id'] = g['gid']
+                if 'id' in g:
+                    out.append(g)
+            return out
+        if resp is None or (isinstance(resp, (int, float)) and resp == 0):
+            return []
+        keys = list(resp.keys()) if isinstance(resp, dict) else []
+        print("DEBUG groups.getById: response type=%s keys=%s" % (type(resp).__name__, keys), flush=True)
+        return []
+
+    def getGroupVideos(self, owner_id, count=200):
+        """Get all videos owned by a group. owner_id must be negative (e.g. -groupId).
+        Args:
+            owner_id (int): Group owner_id (negative).
+            count (int): Per-request limit (max 200).
+        Returns:
+            List of video objects (see VK API video.get).
+        """
+        API_CALL_DELAY = 0.34
+        videos = []
+        offset = 0
+        while True:
+            time.sleep(API_CALL_DELAY)
+            resp = self.call_api('video.get', {
+                'owner_id': owner_id,
+                'count': count,
+                'offset': offset,
+                'extended': 0,
+            })
+            items = resp.get('items', [])
+            total = resp.get('count', 0)
+            videos += items
+            if not items or offset + len(items) >= total:
+                break
+            offset += len(items)
+        return videos
+
+    def getWall(self, owner_id, count=100, offset=0, extended=1):
+        """Get wall posts. owner_id is negative for groups.
+        Returns: dict with 'count', 'items', and if extended: 'profiles', 'groups'.
+        """
+        time.sleep(0.34)
+        return self.call_api('wall.get', {
+            'owner_id': owner_id,
+            'count': count,
+            'offset': offset,
+            'extended': int(extended),
+            'filter': 'all',
+        })
+
+    def getWallComments(self, owner_id, post_id, count=100, offset=0, extended=1):
+        """Get comments for a wall post. Returns dict with 'count', 'items', 'profiles', 'groups' (if extended)."""
+        time.sleep(0.34)
+        return self.call_api('wall.getComments', {
+            'owner_id': owner_id,
+            'post_id': post_id,
+            'count': count,
+            'offset': offset,
+            'extended': int(extended),
+            'need_likes': 0,
+        })
+
+    def getBoardTopics(self, group_id, count=100, offset=0, extended=1, preview=1, preview_length=1):
+        """Get discussion topics. group_id is positive. preview=1 and preview_length=1 return first comment (topic post) with attachments/poll."""
+        time.sleep(0.34)
+        return self.call_api('board.getTopics', {
+            'group_id': group_id,
+            'count': count,
+            'offset': offset,
+            'extended': int(extended),
+            'order': 1,
+            'preview': int(preview),
+            'preview_length': int(preview_length),
+        })
+
+    def getBoardComments(self, group_id, topic_id, count=100, offset=0, extended=1):
+        """Get posts in a discussion topic. Returns dict with 'count', 'items', 'profiles', 'groups' (if extended)."""
+        time.sleep(0.34)
+        return self.call_api('board.getComments', {
+            'group_id': group_id,
+            'topic_id': topic_id,
+            'count': count,
+            'offset': offset,
+            'extended': int(extended),
+            'sort': 'asc',
+        })
